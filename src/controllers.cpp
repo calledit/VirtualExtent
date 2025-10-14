@@ -327,7 +327,7 @@ void Controllers_Shutdown() {
 }
 
 
-
+/*
 static void MouseClickAt(POINT pt, bool right) {
     // Move cursor to the point, then click
     SetCursorPos(pt.x, pt.y);
@@ -338,6 +338,60 @@ static void MouseClickAt(POINT pt, bool right) {
     inputs[0].mi.dwFlags = right ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_LEFTDOWN;
     inputs[1].mi.dwFlags = right ? MOUSEEVENTF_RIGHTUP : MOUSEEVENTF_LEFTUP;
     SendInput(2, inputs, sizeof(INPUT));
+}
+*/
+
+// Give focus to the window under the point (best-effort)
+static void FocusWindowAt(POINT pt) {
+    HWND hwnd = WindowFromPoint(pt);
+    if (!hwnd) return;
+
+    // Climb to the top-level window (some games render in child windows)
+    HWND top = GetAncestor(hwnd, GA_ROOT);
+    if (!top) top = hwnd;
+
+    // Allow us to set foreground and do the switch
+    DWORD targetTid = GetWindowThreadProcessId(top, nullptr);
+    DWORD thisTid = GetCurrentThreadId();
+    AttachThreadInput(thisTid, targetTid, TRUE);
+
+    // If minimized, restore
+    if (IsIconic(top)) ShowWindow(top, SW_RESTORE);
+    SetForegroundWindow(top);
+
+    AttachThreadInput(thisTid, targetTid, FALSE);
+}
+
+// Convert screen px to absolute coords and send move+click via SendInput
+static void SendAbsoluteClick(POINT pt, bool right) {
+    const int vx = GetSystemMetrics(SM_XVIRTUALSCREEN);
+    const int vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
+    const int vw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+    const int vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+
+    // Normalize to [0..65535] across the *virtual* desktop
+    const double nx = (double)(pt.x - vx) * 65535.0 / (double)(vw - 1);
+    const double ny = (double)(pt.y - vy) * 65535.0 / (double)(vh - 1);
+
+    INPUT in[3] = {};
+    in[0].type = INPUT_MOUSE;
+    in[0].mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
+    in[0].mi.dx = (LONG)nx;
+    in[0].mi.dy = (LONG)ny;
+
+    in[1].type = INPUT_MOUSE;
+    in[1].mi.dwFlags = right ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_LEFTDOWN;
+
+    in[2].type = INPUT_MOUSE;
+    in[2].mi.dwFlags = right ? MOUSEEVENTF_RIGHTUP : MOUSEEVENTF_LEFTUP;
+
+    SendInput(3, in, sizeof(INPUT));
+}
+
+// Focus the window under the point, then send the click (it is hard to get games to accept mouse clicks)
+static void MouseClickAt(POINT pt, bool right) {
+    FocusWindowAt(pt);          // try to give focus to the game/window under the cursor
+    SendAbsoluteClick(pt, right);
 }
 
 void Controllers_HandleClicks() {

@@ -359,16 +359,18 @@ void openxr_poll_actions() {
 		XrActionStateBoolean select_state = { XR_TYPE_ACTION_STATE_BOOLEAN };
 		get_info.action = xr_input.selectAction;
 		xrGetActionStateBoolean(xr_session, &get_info, &select_state);
-		xr_input.handSelect[hand] = select_state.currentState && select_state.changedSinceLastSync;
+		const bool selectEdge = (!!select_state.currentState) && (!!select_state.changedSinceLastSync);
+		xr_input.handSelect[hand] = selectEdge ? XR_TRUE : XR_FALSE;
 
 		// Secondary (B/menu) edge
 		XrActionStateBoolean sec_state = { XR_TYPE_ACTION_STATE_BOOLEAN };
 		get_info.action = xr_input.secondaryAction;
 		xrGetActionStateBoolean(xr_session, &get_info, &sec_state);
-		xr_input.handSecondary[hand] = sec_state.currentState && sec_state.changedSinceLastSync;
+		const bool secondaryEdge = (!!sec_state.currentState) && (!!sec_state.changedSinceLastSync);
+		xr_input.handSecondary[hand] = secondaryEdge ? XR_TRUE : XR_FALSE;
 
-		// If an edge occurred, sample pose at that exact timestamp (optional but precise)
-		if (xr_input.handSelect[hand]) {
+		// If an edge occurred, sample pose at that exact timestamp
+		if (selectEdge) {
 			XrSpaceLocation space_location = { XR_TYPE_SPACE_LOCATION };
 			XrResult res = xrLocateSpace(xr_input.handSpace[hand], xr_app_space, select_state.lastChangeTime, &space_location);
 			if (XR_UNQUALIFIED_SUCCESS(res) &&
@@ -377,7 +379,7 @@ void openxr_poll_actions() {
 				xr_input.handPose[hand] = space_location.pose;
 			}
 		}
-		else if (xr_input.handSecondary[hand]) {
+		else if (secondaryEdge) {
 			XrSpaceLocation space_location = { XR_TYPE_SPACE_LOCATION };
 			XrResult res = xrLocateSpace(xr_input.handSpace[hand], xr_app_space, sec_state.lastChangeTime, &space_location);
 			if (XR_UNQUALIFIED_SUCCESS(res) &&
@@ -388,6 +390,7 @@ void openxr_poll_actions() {
 		}
 	}
 }
+
 
 
 
