@@ -46,31 +46,76 @@ bool DesktopCapture::recreateTexture(ID3D11Device* device, uint32_t w, uint32_t 
 	texSR_.Reset();
 	srv_.Reset();
 
-	// Create a shader-readable texture to copy frame data into
+	// Map incoming UNORM format to a TYPELESS resource + SRGB SRV
+	auto toTypeless = [](DXGI_FORMAT f) -> DXGI_FORMAT {
+		switch (f) {
+		case DXGI_FORMAT_B8G8R8A8_UNORM: return DXGI_FORMAT_B8G8R8A8_TYPELESS;
+		case DXGI_FORMAT_R8G8B8A8_UNORM: return DXGI_FORMAT_R8G8B8A8_TYPELESS;
+			// Already SRGB/TYPELESS or unsupported: leave as-is
+		case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
+		case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+		case DXGI_FORMAT_B8G8R8A8_TYPELESS:
+		case DXGI_FORMAT_R8G8B8A8_TYPELESS:
+			return f;
+		default:
+			return f;
+		}
+		};
+	auto toSRGBView = [](DXGI_FORMAT f) -> DXGI_FORMAT {
+		switch (f) {
+		case DXGI_FORMAT_B8G8R8A8_UNORM:
+		case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
+		case DXGI_FORMAT_B8G8R8A8_TYPELESS:   return DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
+		case DXGI_FORMAT_R8G8B8A8_UNORM:
+		case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+		case DXGI_FORMAT_R8G8B8A8_TYPELESS:   return DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+		default:                               return f; // fallback: no srgb view
+		}
+		};
+
+	DXGI_FORMAT resFmt = toTypeless(fmt);
+	DXGI_FORMAT srvFmt = toSRGBView(fmt);
+
+	// 1) Create the shader-readable texture (TYPELESS when possible)
 	D3D11_TEXTURE2D_DESC d{};
 	d.Width = w;
 	d.Height = h;
 	d.MipLevels = 1;
 	d.ArraySize = 1;
-	d.Format = fmt;                 // DDA is typically BGRA8 UNORM
+	d.Format = resFmt;             // TYPELESS preferred
 	d.SampleDesc.Count = 1;
 	d.Usage = D3D11_USAGE_DEFAULT;
 	d.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+	d.CPUAccessFlags = 0;
+	d.MiscFlags = 0;
 
 	if (FAILED(device->CreateTexture2D(&d, nullptr, &texSR_)))
 		return false;
 
+	// 2) Create SRV — prefer SRGB view so sampling returns linear
 	D3D11_SHADER_RESOURCE_VIEW_DESC sv{};
-	sv.Format = fmt;
+	sv.Format = srvFmt;
 	sv.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
 	sv.Texture2D.MostDetailedMip = 0;
 	sv.Texture2D.MipLevels = 1;
-	if (FAILED(device->CreateShaderResourceView(texSR_.Get(), &sv, &srv_)))
-		return false;
 
-	w_ = w; h_ = h; fmt_ = fmt;
+	HRESULT hr = device->CreateShaderResourceView(texSR_.Get(), &sv, &srv_);
+	if (FAILED(hr)) {
+		// Fallback: try standard UNORM view (no auto-linearization)
+		sv.Format = fmt;
+		hr = device->CreateShaderResourceView(texSR_.Get(), &sv, &srv_);
+		if (FAILED(hr))
+			return false;
+		// Note: if you hit this path, keep the HLSL gamma fix (pow 2.2) in your plane shader.
+	}
+
+	w_ = w;
+	h_ = h;
+	fmt_ = fmt;
 	return true;
 }
+
+
 
 bool DesktopCapture::Acquire(ID3D11DeviceContext* ctx,
 	ID3D11ShaderResourceView** outSrv,

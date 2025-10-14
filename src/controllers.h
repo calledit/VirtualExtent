@@ -13,3 +13,5 @@ void Controllers_Draw(const XrCompositionLayerProjectionView& view);
 
 // Release all resources
 void Controllers_Shutdown();
+
+void Controllers_HandleClicks();

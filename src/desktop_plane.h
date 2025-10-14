@@ -13,3 +13,20 @@ void DesktopPlane_Draw(const XrCompositionLayerProjectionView& view);
 
 // Releases all resources.
 void DesktopPlane_Shutdown();
+
+/** Raycast from world-space origin+dir against the desktop plane.
+    Returns true if the ray hits the plane *inside* the quad.
+    outWorldHit : world-space hit position (meters)
+    outUV       : [0..1] UV using the *same mirroring* as the plane shader
+*/
+bool DesktopPlane_Raycast(const DirectX::XMVECTOR& rayOrigin,
+    const DirectX::XMVECTOR& rayDir,
+    DirectX::XMFLOAT3* outWorldHit,
+    DirectX::XMFLOAT2* outUV);
+
+// Map plane UV (already mirrored like your shader) to desktop virtual-screen coords.
+// Returns false if plane not placed or capture not ready.
+bool DesktopPlane_UVToScreen(const DirectX::XMFLOAT2& uv, POINT* outScreenPt);
+
+// Convenience: warp the system cursor; returns false if mapping failed.
+bool DesktopPlane_WarpCursor(const DirectX::XMFLOAT2& uv);

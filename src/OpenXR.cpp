@@ -170,59 +170,7 @@ bool openxr_init(const char* app_name, int64_t swapchain_format) {
 	return true;
 }
 
-void openxr_make_actions() {
-	XrActionSetCreateInfo actionset_info = { XR_TYPE_ACTION_SET_CREATE_INFO };
-	strcpy_s(actionset_info.actionSetName, "gameplay");
-	strcpy_s(actionset_info.localizedActionSetName, "Gameplay");
-	xrCreateActionSet(xr_instance, &actionset_info, &xr_input.actionSet);
-	xrStringToPath(xr_instance, "/user/hand/left", &xr_input.handSubactionPath[0]);
-	xrStringToPath(xr_instance, "/user/hand/right", &xr_input.handSubactionPath[1]);
 
-	XrActionCreateInfo action_info = { XR_TYPE_ACTION_CREATE_INFO };
-	action_info.countSubactionPaths = _countof(xr_input.handSubactionPath);
-	action_info.subactionPaths = xr_input.handSubactionPath;
-	action_info.actionType = XR_ACTION_TYPE_POSE_INPUT;
-	strcpy_s(action_info.actionName, "hand_pose");
-	strcpy_s(action_info.localizedActionName, "Hand Pose");
-	xrCreateAction(xr_input.actionSet, &action_info, &xr_input.poseAction);
-
-	action_info.actionType = XR_ACTION_TYPE_BOOLEAN_INPUT;
-	strcpy_s(action_info.actionName, "select");
-	strcpy_s(action_info.localizedActionName, "Select");
-	xrCreateAction(xr_input.actionSet, &action_info, &xr_input.selectAction);
-
-	XrPath profile_path;
-	XrPath pose_path[2];
-	XrPath select_path[2];
-	xrStringToPath(xr_instance, "/user/hand/left/input/grip/pose", &pose_path[0]);
-	xrStringToPath(xr_instance, "/user/hand/right/input/grip/pose", &pose_path[1]);
-	xrStringToPath(xr_instance, "/user/hand/left/input/select/click", &select_path[0]);
-	xrStringToPath(xr_instance, "/user/hand/right/input/select/click", &select_path[1]);
-	xrStringToPath(xr_instance, "/interaction_profiles/khr/simple_controller", &profile_path);
-	XrActionSuggestedBinding bindings[] = {
-		{ xr_input.poseAction,   pose_path[0]   },
-		{ xr_input.poseAction,   pose_path[1]   },
-		{ xr_input.selectAction, select_path[0] },
-		{ xr_input.selectAction, select_path[1] }, };
-	XrInteractionProfileSuggestedBinding suggested_binds = { XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING };
-	suggested_binds.interactionProfile = profile_path;
-	suggested_binds.suggestedBindings = &bindings[0];
-	suggested_binds.countSuggestedBindings = _countof(bindings);
-	xrSuggestInteractionProfileBindings(xr_instance, &suggested_binds);
-
-	for (int32_t i = 0; i < 2; i++) {
-		XrActionSpaceCreateInfo action_space_info = { XR_TYPE_ACTION_SPACE_CREATE_INFO };
-		action_space_info.action = xr_input.poseAction;
-		action_space_info.poseInActionSpace = xr_pose_identity;
-		action_space_info.subactionPath = xr_input.handSubactionPath[i];
-		xrCreateActionSpace(xr_session, &action_space_info, &xr_input.handSpace[i]);
-	}
-
-	XrSessionActionSetsAttachInfo attach_info = { XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO };
-	attach_info.countActionSets = 1;
-	attach_info.actionSets = &xr_input.actionSet;
-	xrAttachSessionActionSets(xr_session, &attach_info);
-}
 
 void openxr_shutdown() {
 	for (size_t i = 0; i < xr_swapchains.size(); i++) {
@@ -276,37 +224,162 @@ void openxr_poll_events(bool& exit) {
 	}
 }
 
+void openxr_make_actions() {
+	XrActionSetCreateInfo actionset_info = { XR_TYPE_ACTION_SET_CREATE_INFO };
+	strcpy_s(actionset_info.actionSetName, "gameplay");
+	strcpy_s(actionset_info.localizedActionSetName, "Gameplay");
+	xrCreateActionSet(xr_instance, &actionset_info, &xr_input.actionSet);
+	xrStringToPath(xr_instance, "/user/hand/left", &xr_input.handSubactionPath[0]);
+	xrStringToPath(xr_instance, "/user/hand/right", &xr_input.handSubactionPath[1]);
+
+	// Pose action
+	XrActionCreateInfo action_info = { XR_TYPE_ACTION_CREATE_INFO };
+	action_info.countSubactionPaths = _countof(xr_input.handSubactionPath);
+	action_info.subactionPaths = xr_input.handSubactionPath;
+	action_info.actionType = XR_ACTION_TYPE_POSE_INPUT;
+	strcpy_s(action_info.actionName, "hand_pose");
+	strcpy_s(action_info.localizedActionName, "Hand Pose");
+	xrCreateAction(xr_input.actionSet, &action_info, &xr_input.poseAction);
+
+	// Select (trigger)
+	action_info.actionType = XR_ACTION_TYPE_BOOLEAN_INPUT;
+	strcpy_s(action_info.actionName, "select");
+	strcpy_s(action_info.localizedActionName, "Select");
+	xrCreateAction(xr_input.actionSet, &action_info, &xr_input.selectAction);
+
+	// Secondary (menu/B) for right-click
+	action_info.actionType = XR_ACTION_TYPE_BOOLEAN_INPUT;
+	strcpy_s(action_info.actionName, "secondary");
+	strcpy_s(action_info.localizedActionName, "Secondary");
+	xrCreateAction(xr_input.actionSet, &action_info, &xr_input.secondaryAction);
+
+	// ---- Bindings: Khronos simple_controller (fallback) ----
+	{
+		XrPath profile_path;
+		xrStringToPath(xr_instance, "/interaction_profiles/khr/simple_controller", &profile_path);
+
+		XrPath pose_path[2], select_path[2], menu_path[2];
+		xrStringToPath(xr_instance, "/user/hand/left/input/grip/pose", &pose_path[0]);
+		xrStringToPath(xr_instance, "/user/hand/right/input/grip/pose", &pose_path[1]);
+		xrStringToPath(xr_instance, "/user/hand/left/input/select/click", &select_path[0]);
+		xrStringToPath(xr_instance, "/user/hand/right/input/select/click", &select_path[1]);
+		xrStringToPath(xr_instance, "/user/hand/left/input/menu/click", &menu_path[0]);
+		xrStringToPath(xr_instance, "/user/hand/right/input/menu/click", &menu_path[1]);
+
+		XrActionSuggestedBinding bindings[] = {
+			{ xr_input.poseAction,      pose_path[0] },
+			{ xr_input.poseAction,      pose_path[1] },
+			{ xr_input.selectAction,    select_path[0] },
+			{ xr_input.selectAction,    select_path[1] },
+			{ xr_input.secondaryAction, menu_path[0] },
+			{ xr_input.secondaryAction, menu_path[1] },
+		};
+		XrInteractionProfileSuggestedBinding s{ XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING };
+		s.interactionProfile = profile_path;
+		s.suggestedBindings = bindings;
+		s.countSuggestedBindings = (uint32_t)_countof(bindings);
+		xrSuggestInteractionProfileBindings(xr_instance, &s);
+	}
+
+	// ---- Bindings: Oculus Touch (Quest/Link) ----
+	// Provide ALL needed bindings (pose + select + secondary) for this profile too.
+	{
+		XrPath profile_path;
+		if (XR_SUCCEEDED(xrStringToPath(xr_instance, "/interaction_profiles/oculus/touch_controller", &profile_path))) {
+			XrPath poseL, poseR;
+			XrPath trigL, trigR;           // trigger/click (boolean)
+			XrPath btnB, btnX;             // B (right), X (left) for secondary
+
+			xrStringToPath(xr_instance, "/user/hand/left/input/grip/pose", &poseL);
+			xrStringToPath(xr_instance, "/user/hand/right/input/grip/pose", &poseR);
+
+			// Some runtimes expose trigger as click for boolean actions
+			xrStringToPath(xr_instance, "/user/hand/left/input/trigger/click", &trigL);
+			xrStringToPath(xr_instance, "/user/hand/right/input/trigger/click", &trigR);
+
+			xrStringToPath(xr_instance, "/user/hand/right/input/b/click", &btnB);
+			xrStringToPath(xr_instance, "/user/hand/left/input/x/click", &btnX);
+
+			XrActionSuggestedBinding bindings[] = {
+				{ xr_input.poseAction,      poseL },
+				{ xr_input.poseAction,      poseR },
+				{ xr_input.selectAction,    trigL },
+				{ xr_input.selectAction,    trigR },
+				{ xr_input.secondaryAction, btnB  },
+				{ xr_input.secondaryAction, btnX  },
+			};
+			XrInteractionProfileSuggestedBinding s{ XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING };
+			s.interactionProfile = profile_path;
+			s.suggestedBindings = bindings;
+			s.countSuggestedBindings = (uint32_t)_countof(bindings);
+			xrSuggestInteractionProfileBindings(xr_instance, &s);
+		}
+	}
+
+	// Create action spaces for the hand poses
+	for (int32_t i = 0; i < 2; i++) {
+		XrActionSpaceCreateInfo action_space_info = { XR_TYPE_ACTION_SPACE_CREATE_INFO };
+		action_space_info.action = xr_input.poseAction;
+		action_space_info.poseInActionSpace = xr_pose_identity;
+		action_space_info.subactionPath = xr_input.handSubactionPath[i];
+		xrCreateActionSpace(xr_session, &action_space_info, &xr_input.handSpace[i]);
+	}
+
+	// Attach the action set
+	XrSessionActionSetsAttachInfo attach_info = { XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO };
+	attach_info.countActionSets = 1;
+	attach_info.actionSets = &xr_input.actionSet;
+	xrAttachSessionActionSets(xr_session, &attach_info);
+}
+
 void openxr_poll_actions() {
 	if (xr_session_state != XR_SESSION_STATE_FOCUSED)
 		return;
 
-	XrActiveActionSet action_set = { };
+	XrActiveActionSet action_set = {};
 	action_set.actionSet = xr_input.actionSet;
 	action_set.subactionPath = XR_NULL_PATH;
 
 	XrActionsSyncInfo sync_info = { XR_TYPE_ACTIONS_SYNC_INFO };
 	sync_info.countActiveActionSets = 1;
 	sync_info.activeActionSets = &action_set;
-
 	xrSyncActions(xr_session, &sync_info);
 
 	for (uint32_t hand = 0; hand < 2; hand++) {
 		XrActionStateGetInfo get_info = { XR_TYPE_ACTION_STATE_GET_INFO };
 		get_info.subactionPath = xr_input.handSubactionPath[hand];
 
+		// Pose active?
 		XrActionStatePose pose_state = { XR_TYPE_ACTION_STATE_POSE };
 		get_info.action = xr_input.poseAction;
 		xrGetActionStatePose(xr_session, &get_info, &pose_state);
 		xr_input.renderHand[hand] = pose_state.isActive;
 
+		// Select (trigger) edge
 		XrActionStateBoolean select_state = { XR_TYPE_ACTION_STATE_BOOLEAN };
 		get_info.action = xr_input.selectAction;
 		xrGetActionStateBoolean(xr_session, &get_info, &select_state);
 		xr_input.handSelect[hand] = select_state.currentState && select_state.changedSinceLastSync;
 
+		// Secondary (B/menu) edge
+		XrActionStateBoolean sec_state = { XR_TYPE_ACTION_STATE_BOOLEAN };
+		get_info.action = xr_input.secondaryAction;
+		xrGetActionStateBoolean(xr_session, &get_info, &sec_state);
+		xr_input.handSecondary[hand] = sec_state.currentState && sec_state.changedSinceLastSync;
+
+		// If an edge occurred, sample pose at that exact timestamp (optional but precise)
 		if (xr_input.handSelect[hand]) {
 			XrSpaceLocation space_location = { XR_TYPE_SPACE_LOCATION };
-			XrResult        res = xrLocateSpace(xr_input.handSpace[hand], xr_app_space, select_state.lastChangeTime, &space_location);
+			XrResult res = xrLocateSpace(xr_input.handSpace[hand], xr_app_space, select_state.lastChangeTime, &space_location);
+			if (XR_UNQUALIFIED_SUCCESS(res) &&
+				(space_location.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0 &&
+				(space_location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) != 0) {
+				xr_input.handPose[hand] = space_location.pose;
+			}
+		}
+		else if (xr_input.handSecondary[hand]) {
+			XrSpaceLocation space_location = { XR_TYPE_SPACE_LOCATION };
+			XrResult res = xrLocateSpace(xr_input.handSpace[hand], xr_app_space, sec_state.lastChangeTime, &space_location);
 			if (XR_UNQUALIFIED_SUCCESS(res) &&
 				(space_location.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0 &&
 				(space_location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) != 0) {
@@ -315,6 +388,8 @@ void openxr_poll_actions() {
 		}
 	}
 }
+
+
 
 void openxr_poll_predicted(XrTime predicted_time) {
 	if (xr_session_state != XR_SESSION_STATE_FOCUSED)

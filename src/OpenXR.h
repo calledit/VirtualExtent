@@ -28,14 +28,17 @@ struct swapchain_t {
 };
 
 struct input_state_t {
-	XrActionSet actionSet;
-	XrAction    poseAction;
-	XrAction    selectAction;
-	XrPath   handSubactionPath[2];
-	XrSpace  handSpace[2];
-	XrPosef  handPose[2];
-	XrBool32 renderHand[2];
-	XrBool32 handSelect[2];
+    XrActionSet actionSet;
+    XrAction    poseAction;
+    XrAction    selectAction;
+    XrAction    secondaryAction;          // NEW: B/menu/right-click
+
+    XrPath   handSubactionPath[2];
+    XrSpace  handSpace[2];
+    XrPosef  handPose[2];
+    XrBool32 renderHand[2];
+    XrBool32 handSelect[2];
+    XrBool32 handSecondary[2];            // NEW
 };
 
 // OpenXR globals that the app (or D3D code) needs to see

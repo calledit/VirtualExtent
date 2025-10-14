@@ -1,13 +1,19 @@
-#define WIN32_LEAN_AND_MEAN
+﻿#define WIN32_LEAN_AND_MEAN
 #include <d3d11.h>
 #include <d3dcompiler.h>
 #include <directxmath.h>
 #include <wrl/client.h>
 #include <openxr/openxr.h>
+#include <cmath>
+#include <Windows.h>
+#undef min
+#undef max
+#include <algorithm>
 
 #include "desktop_plane.h"
 #include "desktop_capture.h"
 #include "d3d.h" // d3d_device, d3d_context, d3d_xr_projection, d3d_compile_shader
+
 
 using namespace DirectX;
 using Microsoft::WRL::ComPtr;
@@ -35,6 +41,8 @@ static ID3D11ShaderResourceView* s_srv = nullptr;
 static uint32_t s_w = 0, s_h = 0;
 static int s_outputIndex = 0;
 
+
+
 // HLSL for the textured plane (mirror U to fix left-right inversion)
 static constexpr char kPlaneShaderHLSL[] = R"_(
 cbuffer TransformBuffer : register(b0) {
@@ -54,6 +62,9 @@ Texture2D tex0 : register(t0);
 SamplerState s0 : register(s0);
 float4 ps(psIn i) : SV_TARGET { return tex0.Sample(s0, i.uv); }
 )_";
+
+static RECT s_outputRect = { 0,0,0,0 }; // desktop coords of the captured output
+extern uint32_t s_w, s_h;             // your existing capture width/height
 
 // ------------------------------------------------
 
@@ -90,7 +101,7 @@ bool DesktopPlane_Init(float widthMeters, float distanceMeters, int outputIndex)
 	d3d_device->CreatePixelShader(psb->GetBufferPointer(), psb->GetBufferSize(), nullptr, &s_ps);
 
 	D3D11_INPUT_ELEMENT_DESC il[] = {
-		{"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,                           D3D11_INPUT_PER_VERTEX_DATA, 0},
+		{"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,                            D3D11_INPUT_PER_VERTEX_DATA, 0},
 		{"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT,    0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0},
 	};
 	d3d_device->CreateInputLayout(il, (UINT)_countof(il), vsb->GetBufferPointer(), vsb->GetBufferSize(), &s_il);
@@ -133,11 +144,62 @@ bool DesktopPlane_Init(float widthMeters, float distanceMeters, int outputIndex)
 	rd.DepthClipEnable = TRUE;
 	d3d_device->CreateRasterizerState(&rd, &s_rs);
 
-	// Desktop duplication
+	// Desktop duplication on same adapter/output
 	if (!InitCaptureOnSameAdapter(s_outputIndex))
 		return false;
 
+	// --- NEW: record desktop coordinates of the chosen output for cursor warping ---
+	{
+		Microsoft::WRL::ComPtr<IDXGIDevice>  dxgiDev;
+		Microsoft::WRL::ComPtr<IDXGIAdapter> dxgiAdapter;
+		if (SUCCEEDED(d3d_device->QueryInterface(IID_PPV_ARGS(&dxgiDev))) &&
+			SUCCEEDED(dxgiDev->GetAdapter(&dxgiAdapter)))
+		{
+			Microsoft::WRL::ComPtr<IDXGIAdapter1> a1;
+			dxgiAdapter.As(&a1);
+
+			Microsoft::WRL::ComPtr<IDXGIOutput> out;
+			if (a1 && SUCCEEDED(a1->EnumOutputs(s_outputIndex, &out))) {
+				DXGI_OUTPUT_DESC od{};
+				if (SUCCEEDED(out->GetDesc(&od))) {
+					s_outputRect = od.DesktopCoordinates; // virtual-desktop coords for this monitor
+				}
+			}
+		}
+	}
+	// ------------------------------------------------------------------------------
+
 	return true;
+}
+
+
+bool DesktopPlane_UVToScreen(const DirectX::XMFLOAT2& uv, POINT* outScreenPt) {
+	if (s_w == 0 || s_h == 0) return false;
+
+	// Clamp UV to [0..1]
+	float u = uv.x; if (u < 0.0f) u = 0.0f; else if (u > 1.0f) u = 1.0f;
+	float v = uv.y; if (v < 0.0f) v = 0.0f; else if (v > 1.0f) v = 1.0f;
+
+	// Flip U to compensate for the shader's horizontal mirror (o.uv = float2(1 - i.uv.x, i.uv.y))
+	u = 1.0f - u;
+
+	// UV → pixels on the captured output
+	int px = int(u * float(s_w) + 0.5f);
+	int py = int(v * float(s_h) + 0.5f);
+
+	// Pixels → virtual desktop coords on that monitor
+	int sx = s_outputRect.left + px;
+	int sy = s_outputRect.top + py;
+
+	if (outScreenPt) { outScreenPt->x = sx; outScreenPt->y = sy; }
+	return true;
+}
+
+
+bool DesktopPlane_WarpCursor(const DirectX::XMFLOAT2& uv) {
+	POINT pt{};
+	if (!DesktopPlane_UVToScreen(uv, &pt)) return false;
+	return SetCursorPos(pt.x, pt.y) ? true : false;
 }
 
 void DesktopPlane_Draw(const XrCompositionLayerProjectionView& view) {
@@ -237,4 +299,50 @@ void DesktopPlane_Shutdown() {
 
 	s_placed = false;
 	s_w = s_h = 0;
+}
+
+
+
+
+bool DesktopPlane_Raycast(const DirectX::XMVECTOR& rayOrigin,
+	const DirectX::XMVECTOR& rayDir,
+	DirectX::XMFLOAT3* outWorldHit,
+	DirectX::XMFLOAT2* outUV)
+{
+	using namespace DirectX;
+	if (!s_placed) return false;
+
+	// Inverse world to get into plane-local space (quad lies on local z=0, x/y in [-0.5,0.5])
+	XMMATRIX W = XMLoadFloat4x4(&s_worldStored);
+	XMMATRIX Inv = XMMatrixInverse(nullptr, W);
+
+	// Transform ray into local space
+	XMVECTOR oL = XMVector3TransformCoord(rayOrigin, Inv);
+	XMVECTOR dL = XMVector3TransformNormal(rayDir, Inv);
+	float dz = XMVectorGetZ(dL);
+	if (fabsf(dz) < 1e-6f) return false; // parallel to plane
+
+	float t = -XMVectorGetZ(oL) / dz;    // plane is z=0
+	if (t < 0.0f) return false;          // behind origin
+
+	XMVECTOR hitL = XMVectorAdd(oL, XMVectorScale(dL, t));
+	float x = XMVectorGetX(hitL);
+	float y = XMVectorGetY(hitL);
+
+	// inside quad?
+	if (x < -0.5f || x > 0.5f || y < -0.5f || y > 0.5f)
+		return false;
+
+	// Back to world
+	XMVECTOR hitW = XMVector3TransformCoord(hitL, W);
+	if (outWorldHit) XMStoreFloat3(outWorldHit, hitW);
+
+	// UV mapping that matches geometry + shader (shader mirrors U: u' = 1-u)
+	// Geometry mapping: u = x+0.5, v = 1-(y+0.5)
+	float u_geom = x + 0.5f;
+	float v_geom = 1.0f - (y + 0.5f);
+	float u_sample = 1.0f - u_geom; // mirror horizontally, like the shader
+	if (outUV) *outUV = XMFLOAT2(u_sample, v_geom);
+
+	return true;
 }

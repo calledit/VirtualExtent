@@ -39,7 +39,7 @@ int __stdcall wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
 	openxr_make_actions();
 
 	// Init modules
-	Cubes_Init();
+	//Cubes_Init();
 	DesktopPlane_Init(/*widthMeters*/3.0f, /*distanceMeters*/1.5f, /*outputIndex*/0);
 	Controllers_Init();
 
@@ -49,7 +49,8 @@ int __stdcall wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
 
 		if (xr_running) {
 			openxr_poll_actions();
-			Cubes_Update();               // hand select -> spawn cube
+			Controllers_HandleClicks();
+			//Cubes_Update();               // hand select -> spawn cube
 			openxr_render_frame();
 
 			if (xr_session_state != XR_SESSION_STATE_VISIBLE &&
@@ -61,7 +62,7 @@ int __stdcall wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
 
 	// Shutdown modules
 	DesktopPlane_Shutdown();
-	Cubes_Shutdown();
+	//Cubes_Shutdown();
 	Controllers_Shutdown();
 
 	openxr_shutdown();
@@ -86,5 +87,5 @@ void app_draw(XrCompositionLayerProjectionView& view) {
 	Controllers_Draw(view);
 
 	// 2) Draw the cubes
-	Cubes_Draw(view);
+	//Cubes_Draw(view);
 }
