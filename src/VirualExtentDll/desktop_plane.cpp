@@ -1,4 +1,5 @@
-﻿#define WIN32_LEAN_AND_MEAN
+﻿#include "pch.h"
+#define WIN32_LEAN_AND_MEAN
 #include <d3d11.h>
 #include <d3dcompiler.h>
 #include <directxmath.h>

@@ -1,0 +1,66 @@
+{
+	"profile_name": "Half life",
+	"exe_name_hash": "12deac43fa5",
+	"render_frame_funcnr": 4576,
+	"game_loop_update_funcnr": null,
+	"controller_maps":[
+		{
+			"desc": " the khronos simple_controller is just here to show that multiple profiles are supported",
+			"name": "/interaction_profiles/khr/simple_controller",
+			"map": [
+				{
+					"desc": "Connects the trigger button to the mouse",
+					"name": "/user/hand/right/input/select/click",
+					"if_down": {"action": "key_down", "key": 13},
+					"if_up": {"action": "key_up", "key": 13}
+				}
+			]
+		},
+		{
+			"name": "/interaction_profiles/oculus/touch_controller",
+			"map": [
+				{
+					"desc": "Connects the trigger button to the mouse",
+					"name": "/user/hand/right/input/trigger/value",
+					"if_passed_over": {"value": 0.55, "action": "left_mouse_down"},
+					"if_passed_under": {"value": 0.4, "action": "left_mouse_up"}
+				},
+				{
+					"desc": "Presses the D key(VK code 68) when the thumbstick is moved to the right",
+					"name": "/user/hand/right/input/thumbstick",
+					"is_x": true,
+					"if_passed_over": {"value": 0.55, "action": "key_down", "key": 68},
+					"if_passed_under": {"value": 0.4, "action": "key_up", "key": 68}
+				},
+				{
+					"desc": "Presses the A key(VK code 65) when the thumbstick is moved to the left",
+					"name": "/user/hand/right/input/thumbstick",
+					"is_x": true,
+					"if_passed_under": {"value": -0.55, "action": "key_down", "key": 65},
+					"if_passed_over": {"value": -0.4, "action": "key_up", "key": 65}
+				},
+				{
+					"desc": "Presses the S key(VK code 83) when the thumbstick is moved back",
+					"name": "/user/hand/right/input/thumbstick",
+					"is_x": false,
+					"if_passed_under": {"value": -0.55, "action": "key_down", "key": 83},
+					"if_passed_over": {"value": -0.4, "action": "key_up", "key": 83}
+				},
+				{
+					"desc": "Presses the W key(VK code 87) when the thumbstick is moved forward",
+					"name": "/user/hand/right/input/thumbstick",
+					"is_x": false,
+					"is_x": false,
+					"if_passed_over": {"value": 0.55, "action": "key_down", "key": 87},
+					"if_passed_under": {"value": 0.4, "action": "key_up", "key": 87}
+				},
+				{
+					"desc": "Presses spacebar(VK code 32) when the a button is cliked",
+					"name": "/user/hand/right/input/a/click",
+					"if_down": {"action": "key_down", "key": 32},
+					"if_up": {"action": "key_up", "key": 32}
+				}
+			]
+		}
+	]
+}

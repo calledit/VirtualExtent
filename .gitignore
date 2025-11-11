@@ -39,3 +39,9 @@
 
 # debug information files
 *.dwo
+src/VirtualExtentLoader/.vs/
+src/VirualExtentDll/.vs/
+src/VirualExtentDll/packages/
+src/VirualExtentDll/x64/
+src/VirualExtentDll/VirualExtentDll/
+src/VirtualExtentLoader/VirtualE.e7a5d74d/

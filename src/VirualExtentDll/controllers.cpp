@@ -1,4 +1,5 @@
-﻿#define WIN32_LEAN_AND_MEAN
+﻿#include "pch.h"
+#define WIN32_LEAN_AND_MEAN
 #include <d3d11.h>
 #include <d3dcompiler.h>
 #include <directxmath.h>
@@ -183,10 +184,6 @@ bool Controllers_Init() {
     MakeUnitRayBox(&s_vbRay, &s_ibRay);
 
     return true;
-}
-
-void Controllers_UpdatePredicted() {
-    // No persistent state; we read xr_input.handPose each draw.
 }
 
 static void DrawOne(const XrCompositionLayerProjectionView& view, int handIdx, const XMFLOAT4& color) {
@@ -388,36 +385,205 @@ static void SendAbsoluteClick(POINT pt, bool right) {
     SendInput(3, in, sizeof(INPUT));
 }
 
+static void SendKeyTap(WORD vk) {
+    INPUT in[2] = {};
+    in[0].type = INPUT_KEYBOARD;
+    in[0].ki.wVk = vk;
+
+    in[1].type = INPUT_KEYBOARD;
+    in[1].ki.wVk = vk;
+    in[1].ki.dwFlags = KEYEVENTF_KEYUP;
+
+    SendInput(2, in, sizeof(INPUT));
+}
+
+static void SendWheelAt(POINT pt, int wheelDelta) {
+    // Focus the target window (important for games)
+    FocusWindowAt(pt);
+
+    INPUT in{};
+    in.type = INPUT_MOUSE;
+    in.mi.dwFlags = MOUSEEVENTF_WHEEL;
+    in.mi.mouseData = wheelDelta; // +120 = scroll up, -120 = scroll down
+    SendInput(1, &in, sizeof(INPUT));
+}
+
 // Focus the window under the point, then send the click (it is hard to get games to accept mouse clicks)
 static void MouseClickAt(POINT pt, bool right) {
     FocusWindowAt(pt);          // try to give focus to the game/window under the cursor
     SendAbsoluteClick(pt, right);
 }
 
-void Controllers_HandleClicks() {
-    // For each hand, if a button edge fired, raycast and click if hitting the desktop
-    for (int hand = 0; hand < 2; ++hand) {
-        bool doLeft = xr_input.handSelect[hand] ? true : false;
-        bool doRight = xr_input.handSecondary[hand] ? true : false;
-        if (!doLeft && !doRight) continue;
+static void SendKeyTap_Scan(WORD vk) {
+    // Convert VK -> scan code for the current layout
+    HKL layout = GetKeyboardLayout(0);
+    UINT sc = MapVirtualKeyEx(vk, MAPVK_VK_TO_VSC_EX, layout);
 
-        // Build a slightly-down-tilted ray from the grip pose (same as you draw)
-        const float tiltDeg = -35.0f;
-        using namespace DirectX;
-        XMVECTOR q = XMLoadFloat4((XMFLOAT4*)&xr_input.handPose[hand].orientation);
-        XMVECTOR p = XMLoadFloat3((XMFLOAT3*)&xr_input.handPose[hand].position);
-        XMVECTOR tq = XMQuaternionRotationAxis(XMVectorSet(1, 0, 0, 0), XMConvertToRadians(tiltDeg));
-        XMVECTOR qTilt = XMQuaternionMultiply(tq, q);
-        XMVECTOR dirW = XMVector3Normalize(XMVector3Rotate(XMVectorSet(0, 0, -1, 0), qTilt));
+    // Some keys require the extended flag (E0). If the scan code has 0xE000 prefix, set EXTENDEDKEY.
+    DWORD extFlag = 0;
+    if ((sc & 0x0100) != 0) extFlag = KEYEVENTF_EXTENDEDKEY; // crude check; many use a lookup table
 
-        DirectX::XMFLOAT3 hitW;
-        DirectX::XMFLOAT2 uv;
-        if (DesktopPlane_Raycast(p, dirW, &hitW, &uv)) {
-            POINT pt{};
-            if (DesktopPlane_UVToScreen(uv, &pt)) {
-                if (doLeft)  MouseClickAt(pt, /*right=*/false);
-                if (doRight) MouseClickAt(pt, /*right=*/true);
-            }
-        }
+    INPUT in[2]{};
+    in[0].type = INPUT_KEYBOARD;
+    in[0].ki.wScan = (WORD)sc;
+    in[0].ki.dwFlags = KEYEVENTF_SCANCODE | extFlag;
+
+    in[1] = in[0];
+    in[1].ki.dwFlags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP | extFlag;
+
+    SendInput(2, in, sizeof(INPUT));
+}
+
+static void SendCharPressHold(wchar_t ch, DWORD hold_ms = 100) {
+    HKL layout = GetKeyboardLayout(0);
+
+    SHORT vkAndMods = VkKeyScanExW(ch, layout);
+    if (vkAndMods == -1) return; // char not representable
+
+    BYTE mods = HIBYTE(vkAndMods);
+    WORD vk = LOBYTE(vkAndMods);
+
+    auto scOf = [&](WORD vkKey)->UINT {
+        return MapVirtualKeyEx(vkKey, MAPVK_VK_TO_VSC_EX, layout);
+        };
+
+    INPUT seq[16]{};
+    int n = 0;
+
+    // press modifiers
+    if (mods & 1) { seq[n].type = INPUT_KEYBOARD; seq[n].ki.wScan = (WORD)scOf(VK_SHIFT); seq[n].ki.dwFlags = KEYEVENTF_SCANCODE; n++; }
+    if (mods & 2) { seq[n].type = INPUT_KEYBOARD; seq[n].ki.wScan = (WORD)scOf(VK_CONTROL); seq[n].ki.dwFlags = KEYEVENTF_SCANCODE; n++; }
+    if (mods & 4) { seq[n].type = INPUT_KEYBOARD; seq[n].ki.wScan = (WORD)scOf(VK_MENU); seq[n].ki.dwFlags = KEYEVENTF_SCANCODE; n++; }
+
+    // main key down (by SCANCODE)
+    UINT sc = MapVirtualKeyEx(vk, MAPVK_VK_TO_VSC_EX, layout);
+    seq[n].type = INPUT_KEYBOARD; seq[n].ki.wScan = (WORD)sc; seq[n].ki.dwFlags = KEYEVENTF_SCANCODE; n++;
+    SendInput(n, seq, sizeof(INPUT));
+
+    // hold a bit so picky games register it
+    if (hold_ms) Sleep(hold_ms);
+
+    // main key up
+    INPUT upMain{}; upMain.type = INPUT_KEYBOARD; upMain.ki.wScan = (WORD)sc; upMain.ki.dwFlags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP;
+    SendInput(1, &upMain, sizeof(INPUT));
+
+    // release modifiers (reverse order)
+    INPUT ups[3]{}; int m = 0;
+    if (mods & 4) { ups[m].type = INPUT_KEYBOARD; ups[m].ki.wScan = (WORD)scOf(VK_MENU);    ups[m].ki.dwFlags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP; m++; }
+    if (mods & 2) { ups[m].type = INPUT_KEYBOARD; ups[m].ki.wScan = (WORD)scOf(VK_CONTROL); ups[m].ki.dwFlags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP; m++; }
+    if (mods & 1) { ups[m].type = INPUT_KEYBOARD; ups[m].ki.wScan = (WORD)scOf(VK_SHIFT);   ups[m].ki.dwFlags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP; m++; }
+    if (m) SendInput(m, ups, sizeof(INPUT));
+}
+
+// --- Non-blocking scan-code key tap scheduler -------------------------------
+#include <vector>
+
+static bool NeedsExtended(WORD vk) {
+    switch (vk) {
+    case VK_INSERT: case VK_DELETE: case VK_HOME: case VK_END:
+    case VK_PRIOR:  case VK_NEXT:   // PageUp/PageDown
+    case VK_RIGHT:  case VK_LEFT:   case VK_UP:   case VK_DOWN:
+    case VK_NUMLOCK: case VK_DIVIDE: case VK_RMENU: case VK_RCONTROL:
+        // NOTE: main Enter is not extended; numpad Enter would be, but shares VK_RETURN.
+        // If you specifically want numpad Enter-as-extended, set the flag yourself.
+        return true;
+    default: return false;
     }
 }
+
+static void SendKeyDown_Scan(WORD vk) {
+    HKL kl = GetKeyboardLayout(0);
+    UINT sc = MapVirtualKeyEx(vk, MAPVK_VK_TO_VSC_EX, kl);
+    if (sc == 0) return;
+    DWORD flags = KEYEVENTF_SCANCODE | (NeedsExtended(vk) ? KEYEVENTF_EXTENDEDKEY : 0);
+
+    INPUT in{}; in.type = INPUT_KEYBOARD;
+    in.ki.wScan = (WORD)sc;
+    in.ki.dwFlags = flags;
+    SendInput(1, &in, sizeof(in));
+}
+
+static void SendKeyUp_Scan(WORD vk) {
+    HKL kl = GetKeyboardLayout(0);
+    UINT sc = MapVirtualKeyEx(vk, MAPVK_VK_TO_VSC_EX, kl);
+    if (sc == 0) return;
+    DWORD flags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP | (NeedsExtended(vk) ? KEYEVENTF_EXTENDEDKEY : 0);
+
+    INPUT in{}; in.type = INPUT_KEYBOARD;
+    in.ki.wScan = (WORD)sc;
+    in.ki.dwFlags = flags;
+    SendInput(1, &in, sizeof(in));
+}
+
+struct KeyTapTask {
+    WORD        vk;
+    ULONGLONG   upTimeMs;
+    bool        downSent;
+};
+
+static std::vector<KeyTapTask> s_keyTapQueue;
+
+// Schedule a tap; sends DOWN now, UP after hold_ms (via PumpScheduledKeys per frame)
+static void ScheduleKeyTap_Scan(WORD vk, DWORD hold_ms = 100) {
+    // Send DOWN immediately (non-blocking)
+    SendKeyDown_Scan(vk);
+
+    KeyTapTask t{};
+    t.vk = vk;
+    t.upTimeMs = GetTickCount64() + hold_ms;
+    t.downSent = true;
+    s_keyTapQueue.push_back(t);
+}
+
+// Call this once per frame (e.g., in your input/update loop)
+static void PumpScheduledKeys() {
+    if (s_keyTapQueue.empty()) return;
+    ULONGLONG now = GetTickCount64();
+
+    // compact in-place
+    size_t w = 0;
+    for (size_t i = 0; i < s_keyTapQueue.size(); ++i) {
+        auto& task = s_keyTapQueue[i];
+        if (task.downSent && now >= task.upTimeMs) {
+            SendKeyUp_Scan(task.vk);
+            // drop it
+        }
+        else {
+            s_keyTapQueue[w++] = task;
+        }
+    }
+    s_keyTapQueue.resize(w);
+}
+
+// Return screen position of controller raycast hit, or std::nullopt if no hit
+std::optional<POINT> get_cursor_pos(bool right_hand = true) {
+    using namespace DirectX;
+
+    int hand = right_hand ? 1 : 0;
+
+    // Load pose orientation and position
+    XMVECTOR q = XMLoadFloat4((XMFLOAT4*)&xr_input.handPose[hand].orientation);
+    XMVECTOR p = XMLoadFloat3((XMFLOAT3*)&xr_input.handPose[hand].position);
+
+    // Apply tilt
+    const float tiltDeg = -35.0f;
+    XMVECTOR tq = XMQuaternionRotationAxis(XMVectorSet(1, 0, 0, 0), XMConvertToRadians(tiltDeg));
+    XMVECTOR qTilt = XMQuaternionMultiply(tq, q);
+
+    // Direction of the ray in world space
+    XMVECTOR dirW = XMVector3Normalize(XMVector3Rotate(XMVectorSet(0, 0, -1, 0), qTilt));
+
+    DirectX::XMFLOAT3 hitW;
+    DirectX::XMFLOAT2 uv;
+
+    // Raycast toward the desktop plane
+    if (DesktopPlane_Raycast(p, dirW, &hitW, &uv)) {
+        POINT pt{};
+        if (DesktopPlane_UVToScreen(uv, &pt)) {
+            return pt;
+        }
+    }
+
+    return std::nullopt;
+}
+

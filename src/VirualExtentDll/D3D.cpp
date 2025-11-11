@@ -1,7 +1,5 @@
-// Länkbibliotek kan ligga kvar i main.cpp, men går bra här också om du vill
-//#pragma comment(lib,"D3D11.lib")
-//#pragma comment(lib,"D3dcompiler.lib")
-//#pragma comment(lib,"Dxgi.lib")
+#include "pch.h"
+
 
 #define XR_USE_PLATFORM_WIN32
 #define XR_USE_GRAPHICS_API_D3D11
